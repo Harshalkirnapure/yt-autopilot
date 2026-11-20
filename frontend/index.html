@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YT AutoPilot — automated video studio</title>
+    <meta name="color-scheme" content="dark" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">▶</span>
+          <div>
+            <h1>YT AutoPilot</h1>
+            <p>AI topic → script → MP3 voiceover → stock clips → FFmpeg render → private upload</p>
+          </div>
+        </div>
+        <div class="chips" aria-label="System status">
+          <span class="chip" id="chip-db">Database…</span>
+          <span class="chip" id="chip-ffmpeg">FFmpeg…</span>
+          <span class="chip" id="chip-yt">YouTube…</span>
+          <span class="chip" id="chip-quota">Uploads —</span>
+          <span class="chip" id="chip-scheduler">Cron —</span>
+          <span class="chip" id="chip-pipeline">Pipeline —</span>
+        </div>
+        <button class="btn ghost small" id="btn-logout" type="button">Sign out</button>
+      </header>
+
+      <div class="banner" id="banner" role="status" hidden></div>
+
+      <div class="layout">
+        <main class="column">
+          <section class="card" aria-labelledby="setup-title">
+            <div class="card-head">
+              <div>
+                <span class="step">01</span>
+                <h2 id="setup-title">Channel setup</h2>
+              </div>
+              <p class="hint">Prompts are built from these values — nothing is hardcoded.</p>
+            </div>
+            <div class="fields">
+              <label class="field">
+                <span>Niche</span>
+                <input id="niche" type="text" placeholder="e.g. personal finance for freelancers" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Audience</span>
+                <input id="audience" type="text" placeholder="e.g. first-time investors in India" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Language / tone</span>
+                <input id="language" type="text" placeholder="e.g. English (India), friendly and direct" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Script length (words)</span>
+                <input id="length" type="number" min="150" max="3000" step="50" placeholder="700" />
+              </label>
+              <label class="field wide">
+                <span>Voiceover voice</span>
+                <select id="voice"></select>
+              </label>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="topics-title">
+            <div class="card-head">
+              <div>
+                <span class="step">02</span>
+                <h2 id="topics-title">Topic research</h2>
+              </div>
+              <div class="head-actions">
+                <span class="pill" id="topic-source">Not generated</span>
+                <button class="btn primary" id="btn-topics" type="button">Generate 6 topics</button>
+              </div>
+            </div>
+            <p class="hint">Previously used topics and footage are excluded automatically.</p>
+            <div class="topic-list" id="topic-list">
+              <p class="empty">No topics yet. Generate a set, then pick one to start a draft.</p>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="script-title">
+            <div class="card-head">
+              <div>
+                <span class="step">03</span>
+                <h2 id="script-title">Script</h2>
+              </div>
+              <div class="head-actions">
+                <span class="pill" id="script-count">0 words</span>
+                <button class="btn" id="btn-script" type="button">Generate script</button>
+                <button class="btn ghost" id="btn-save-script" type="button">Save edits</button>
+              </div>
+            </div>
+            <label class="field">
+              <span class="sr-only">Script</span>
+              <textarea id="script" rows="16" placeholder="Generate a script, then edit it here before creating the voiceover."></textarea>
+            </label>
+            <p class="hint">Edits are saved to the render and the TTS engine exactly as written here.</p>
+          </section>
+
+          <section class="card" aria-labelledby="audio-title">
+            <div class="card-head">
+              <div>
+                <span class="step">04</span>
+                <h2 id="audio-title">Voiceover (MP3)</h2>
+              </div>
+              <button class="btn" id="btn-tts" type="button">Generate MP3</button>
+            </div>
+            <p class="hint">
+              Server-side TTS only — browser SpeechSynthesis cannot be captured into a video file.
+            </p>
+            <audio id="audio-player" controls hidden></audio>
+            <p class="meta" id="audio-meta">No audio yet.</p>
+          </section>
+
+          <section class="card" aria-labelledby="render-title">
+            <div class="card-head">
+              <div>
+                <span class="step">05</span>
+                <h2 id="render-title">Render 1080p MP4</h2>
+              </div>
+              <button class="btn" id="btn-render" type="button">Start render</button>
+            </div>
+            <p class="hint">Pexels clips are deduplicated, cut to the script sections, captioned and muxed with the MP3.</p>
+            <div class="progress-head">
+              <span id="render-stage">Idle</span>
+              <span id="render-percent">0%</span>
+            </div>
+            <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="render-progress">
+              <div class="progress-bar" id="render-bar"></div>
+            </div>
+            <div class="render-foot">
+              <span class="meta" id="render-job">No render job yet.</span>
+              <a class="link" id="video-link" href="#" target="_blank" rel="noreferrer" hidden>Open rendered MP4</a>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="seo-title-heading">
+            <div class="card-head">
+              <div>
+                <span class="step">06</span>
+                <h2 id="seo-title-heading">SEO metadata</h2>
+              </div>
+              <div class="head-actions">
+                <button class="btn" id="btn-seo" type="button">Generate metadata</button>
+                <button class="btn ghost" id="btn-save-seo" type="button">Save metadata</button>
+              </div>
+            </div>
+            <div class="subhead">Title options</div>
+            <div class="title-options" id="seo-titles">
+              <p class="empty">Generate metadata to see title options.</p>
+            </div>
+            <label class="field">
+              <span>Description</span>
+              <textarea id="seo-description" rows="7" placeholder="Description with hashtags…"></textarea>
+            </label>
+            <label class="field">
+              <span>Tags (comma separated)</span>
+              <input id="seo-tags" type="text" placeholder="personal finance, budgeting, savings" />
+            </label>
+            <div class="subhead">Pre-publish checklist</div>
+            <ul class="checklist" id="seo-checklist">
+              <li>Verify facts and claims in the script.</li>
+              <li>Listen to the full voiceover before approving.</li>
+              <li>Confirm the privacy setting is private or unlisted.</li>
+            </ul>
+          </section>
+
+          <section class="card" aria-labelledby="thumb-title-heading">
+            <div class="card-head">
+              <div>
+                <span class="step">07</span>
+                <h2 id="thumb-title-heading">Thumbnail</h2>
+              </div>
+              <div class="head-actions">
+                <button class="btn ghost" id="btn-thumb-download" type="button">Download PNG</button>
+                <button class="btn" id="btn-thumb-save" type="button">Save to draft</button>
+              </div>
+            </div>
+            <div class="thumb-grid">
+              <div class="canvas-wrap">
+                <canvas id="canvas" width="1280" height="720"></canvas>
+              </div>
+              <div class="thumb-controls">
+                <label class="field">
+                  <span>Headline</span>
+                  <input id="thumb-title" type="text" maxlength="80" placeholder="Your video title" />
+                </label>
+                <label class="field">
+                  <span>Sub-line</span>
+                  <input id="thumb-subtitle" type="text" maxlength="70" placeholder="Short supporting line" />
+                </label>
+                <label class="field">
+                  <span>Badge</span>
+                  <input id="thumb-badge" type="text" maxlength="28" placeholder="NICHE" />
+                </label>
+                <label class="field">
+                  <span>Palette</span>
+                  <select id="thumb-palette">
+                    <option value="midnight">Midnight lime</option>
+                    <option value="sunset">Sunset amber</option>
+                    <option value="ocean">Ocean teal</option>
+                    <option value="paper">Paper ink</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Accent colour</span>
+                  <input id="thumb-accent" type="color" value="#c8f751" />
+                </label>
+                <p class="meta" id="thumb-status">Not saved to the draft yet.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="card" aria-labelledby="upload-title">
+            <div class="card-head">
+              <div>
+                <span class="step">08</span>
+                <h2 id="upload-title">Upload &amp; approve</h2>
+              </div>
+              <div class="head-actions">
+                <span class="pill" id="yt-status">YouTube…</span>
+                <button class="btn ghost" id="btn-yt-connect" type="button">Connect channel</button>
+              </div>
+            </div>
+            <p class="hint">
+              Uploads are always private or unlisted first. Publishing is a separate, human-approved step and
+              stays locked until Google's compliance audit is passed.
+            </p>
+            <div class="fields upload-fields">
+              <label class="field">
+                <span>Privacy on upload</span>
+                <select id="privacy">
+                  <option value="private">Private (recommended)</option>
+                  <option value="unlisted">Unlisted</option>
+                </select>
+              </label>
+            </div>
+            <p class="meta" id="disclosure-status">Synthetic-media disclosure: checking…</p>
+            <label class="check">
+              <input id="confirm-review" type="checkbox" />
+              <span>I reviewed the script, audio, captions, thumbnail, privacy setting and the synthetic-media disclosure.</span>
+            </label>
+            <button class="btn primary" id="btn-upload" type="button">Upload to YouTube</button>
+            <p class="meta" id="upload-result"></p>
+
+            <div class="divider"></div>
+            <div class="subhead">Human-in-the-loop approval</div>
+            <label class="check">
+              <input id="confirm-approve" type="checkbox" />
+              <span>I approve this video for publication on the connected channel.</span>
+            </label>
+            <button class="btn" id="btn-approve" type="button">Record approval</button>
+            <p class="meta" id="approval-status">No upload to approve yet.</p>
+            <button class="btn ghost" id="btn-publish" type="button" disabled>Publish (requires audit)</button>
+            <p class="hint" id="publish-note">
+              Publishing unlocks only after the compliance audit flag is enabled on the server.
+            </p>
+          </section>
+        </main>
+
+        <aside class="column side">
+          <section class="card sticky">
+            <div class="card-head">
+              <div>
+                <h2>This run</h2>
+              </div>
+              <button class="btn ghost small" id="btn-refresh" type="button">Refresh</button>
+            </div>
+            <dl class="summary">
+              <div><dt>Topic</dt><dd id="summary-topic">No draft yet</dd></div>
+              <div><dt>Video id</dt><dd id="summary-id">—</dd></div>
+              <div><dt>Status</dt><dd id="summary-status">—</dd></div>
+              <div><dt>Assets</dt><dd id="summary-files" class="badges">—</dd></div>
+            </dl>
+
+            <div class="divider"></div>
+            <div class="subhead">Recent drafts</div>
+            <div class="recent" id="recent-list"><p class="empty">Nothing saved yet.</p></div>
+
+            <div class="divider"></div>
+            <div class="subhead">Activity log</div>
+            <ul class="logs" id="log-list"><li class="empty">No activity yet.</li></ul>
+          </section>
+        </aside>
+      </div>
+
+      <footer class="footer">
+        <span>Only CC0 / Pexels / AI-generated assets. No third-party YouTube downloads.</span>
+        <span>FFmpeg muxes the MP3 voiceover — never browser-captured audio.</span>
+      </footer>
+    </div>
+
+    <div class="auth-gate" id="auth-gate" hidden>
+      <form class="auth-card" id="auth-form">
+        <h2>Sign in to YT AutoPilot</h2>
+        <p class="hint">
+          Every API call needs the token. Find it in <code>backend/.api-token</code>, or set
+          <code>API_TOKEN</code> in <code>backend/.env</code> and restart the server.
+        </p>
+        <label class="field">
+          <span>API token</span>
+          <input id="auth-token" type="password" autocomplete="current-password" required />
+        </label>
+        <label class="field">
+          <span>Your name (recorded when you approve)</span>
+          <input id="auth-name" type="text" autocomplete="name" maxlength="80" />
+        </label>
+        <p class="meta" id="auth-error" role="alert"></p>
+        <button class="btn primary" id="auth-submit" type="submit">Sign in</button>
+      </form>
+    </div>
+
+    <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck, build, unit tests, Postgres suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yt
+          POSTGRES_PASSWORD: yt
+          POSTGRES_DB: yt_autopilot
+        ports:
+          - '5432:5432'
+        options: >-
+          --health-cmd "pg_isready -U yt -d yt_autopilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      CI: 'true'
+      NODE_ENV: test
+      # The suite creates/drops its own yt_autopilot_test database from this admin connection.
+      DATABASE_URL: postgresql://yt:yt@localhost:5432/yt_autopilot
+      PG_TEST_DATABASE: yt_autopilot_test
+      # Keep tests off the real token file, exactly like scripts/run-tests.mjs does.
+      API_TOKEN: test-token
+      APPROVER_NAME: ci-approver
+      SCHEDULER_ENABLED: 'false'
+      # Use the distro FFmpeg: it is built with libass + fontconfig, so the burn-in assertion in
+      # test/render.test.ts measures real captions rather than a silent sidecar-only fallback.
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      FFPROBE_PATH: /usr/bin/ffprobe
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install FFmpeg and caption fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-dejavu-core fonts-liberation
+
+          ffmpeg -hide_banner -version | head -n 1
+          ffprobe -hide_banner -version | head -n 1
+
+          # libass renders the .ass captions; without it the render also "succeeds" but captionless,
+          # which is what the pixel assertion exists to catch. Fail here instead of at that assert.
+          if ! ffmpeg -hide_banner -filters 2>/dev/null | grep -q ' subtitles '; then
+            echo '::error::This FFmpeg build has no libass "subtitles" filter; captions cannot be verified.'
+            exit 1
+          fi
+
+          # The .ass style asks for Arial; fontconfig aliases it to Liberation Sans, DejaVu as fallback.
+          fc-match Arial
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: backend
+        run: |
+          npm run typecheck
+          npm run typecheck:test
+
+      - name: Build
+        working-directory: backend
+        run: |
+          npm run build
+          test -f dist/server.js
+          test -f dist/db/schema.sql
+
+      - name: Unit tests (in-memory store, no API keys)
+        working-directory: backend
+        run: npm test
+
+      - name: Postgres integration suite
+        working-directory: backend
+        run: npm run test:db
