@@ -285,9 +285,19 @@ function wrapCaption(text: string, maxChars = 40, maxLines = 3): string {
   return lines.join('\\N');
 }
 
-/** Builds an .ass sidecar timed across each section, chunked into readable captions. */
-export async function writeAssFile(sections: ScriptSection[], filePath: string): Promise<void> {
-  const events: string[] = [];
+export interface CaptionCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * One cue per ~9-word chunk of a section, spread evenly across that section's timing. The burned-in
+ * .ass and the uploaded .srt are both built from this list, so a caption cannot say one thing on
+ * screen and another in the transcript.
+ */
+export function buildCaptionCues(sections: ScriptSection[]): CaptionCue[] {
+  const cues: CaptionCue[] = [];
 
   for (const section of sections) {
     const words = section.text.split(/\s+/).filter(Boolean);
@@ -303,11 +313,19 @@ export async function writeAssFile(sections: ScriptSection[], filePath: string):
       const start = section.start + index * sliceDuration;
       const end = Math.min(section.start + section.duration, start + sliceDuration);
       if (end - start <= 0.05) return;
-      events.push(
-        `Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${wrapCaption(escapeAss(chunk))}`,
-      );
+      cues.push({ start, end, text: chunk });
     });
   }
+
+  return cues;
+}
+
+/** Builds an .ass sidecar (burned into the video) from the shared caption cues. */
+export async function writeAssFile(sections: ScriptSection[], filePath: string): Promise<void> {
+  const events = buildCaptionCues(sections).map(
+    (cue) =>
+      `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},Caption,,0,0,0,,${wrapCaption(escapeAss(cue.text))}`,
+  );
 
   const content = [
     '[Script Info]',
@@ -328,6 +346,29 @@ export async function writeAssFile(sections: ScriptSection[], filePath: string):
   ].join('\n');
 
   await fsp.writeFile(filePath, content, 'utf8');
+}
+
+/** `1:02:03,400` — SubRip timecodes are comma-separated and always millisecond-precision. */
+function srtTime(seconds: number): string {
+  const total = Math.max(0, seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = Math.floor(total % 60);
+  const millis = Math.round((total - Math.floor(total)) * 1000);
+  const carrySeconds = millis === 1000 ? 1 : 0;
+  const printed = (secs + carrySeconds) % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(printed).padStart(2, '0')},${String(millis % 1000).padStart(3, '0')}`;
+}
+
+/**
+ * Builds the .srt sidecar uploaded as the video's caption track. Same cues and timings as the burned
+ * captions, so the searchable transcript is the script instead of YouTube's auto-captions.
+ */
+export async function writeSrtFile(sections: ScriptSection[], filePath: string): Promise<void> {
+  const blocks = buildCaptionCues(sections).map(
+    (cue, index) => `${index + 1}\n${srtTime(cue.start)} --> ${srtTime(cue.end)}\n${escapeAss(cue.text)}\n`,
+  );
+  await fsp.writeFile(filePath, blocks.join('\n'), 'utf8');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -358,6 +399,8 @@ const pexelsClipSource: ClipSource = {
 export interface RenderResult {
   videoPath: string;
   captionPath: string;
+  /** SubRip sidecar for the YouTube caption track (same timings as the burned captions). */
+  subtitlePath: string;
   durationSeconds: number;
   sections: number;
   clipIds: string[];
@@ -543,7 +586,9 @@ export async function renderVideo(request: RenderRequest): Promise<RenderResult>
 
     report(78, 'writing captions');
     const captionPath = path.join(paths.videos, `${videoId}.ass`);
+    const subtitlePath = path.join(paths.videos, `${videoId}.srt`);
     await writeAssFile(sections, captionPath);
+    await writeSrtFile(sections, subtitlePath);
 
     report(84, 'muxing audio and captions');
     const videoPath = path.join(paths.videos, `${videoId}.mp4`);
@@ -574,6 +619,7 @@ export async function renderVideo(request: RenderRequest): Promise<RenderResult>
     return {
       videoPath,
       captionPath,
+      subtitlePath,
       durationSeconds: audioDuration,
       sections: sections.length,
       clipIds,

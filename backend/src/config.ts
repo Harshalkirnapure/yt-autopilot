@@ -111,6 +111,8 @@ export const config = {
   // disclosure (status.containsSyntheticMedia) is on unless explicitly turned off.
   ytDiscloseSyntheticMedia: envBool('YT_DISCLOSE_SYNTHETIC_MEDIA', true),
   ytCategoryId: envString('YT_CATEGORY_ID', '22'),
+  // BCP-47 code of the uploaded caption track (the narration is English unless you change TTS).
+  ytCaptionLanguage: envString('YT_CAPTION_LANGUAGE', 'en'),
   maxUploadsPerDay: envNumber('MAX_UPLOADS_PER_DAY', 6),
 
   // Admin alerts

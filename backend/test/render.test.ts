@@ -37,6 +37,7 @@ const SCRIPT = [
 const videoId = randomUUID();
 const outputPath = path.join(paths.videos, `${videoId}.mp4`);
 const captionPath = path.join(paths.videos, `${videoId}.ass`);
+const subtitlePath = path.join(paths.videos, `${videoId}.srt`);
 const captionFilterCopy = path.join(paths.backend, `.yt-captions-${videoId}.ass`);
 
 let ffmpegReady = false;
@@ -74,6 +75,13 @@ function grabLumaFrame(file: string, atSeconds: number): Promise<Buffer> {
 function assTimestamp(value: string): number {
   const [hours, minutes, seconds] = value.split(':');
   return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
+/** `00:00:03,200` → 3.2 */
+function srtTimestamp(value: string): number {
+  const [hours, minutes, rest] = value.split(':');
+  const [seconds, millis] = rest!.split(',');
+  return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds) + Number(millis) / 1000;
 }
 
 /** Near-white (luma ≥ 220) pixels between two rows: burned-in captions are white on colour. */
@@ -127,7 +135,13 @@ before(async () => {
 after(async () => {
   await closeStore();
   if (fixtureDir) await fsp.rm(fixtureDir, { recursive: true, force: true }).catch(() => undefined);
-  for (const leftover of [outputPath, captionPath, captionFilterCopy, path.join(paths.temp, `render-${videoId}`)]) {
+  for (const leftover of [
+    outputPath,
+    captionPath,
+    subtitlePath,
+    captionFilterCopy,
+    path.join(paths.temp, `render-${videoId}`),
+  ]) {
     fs.rmSync(leftover, { recursive: true, force: true });
   }
 });
@@ -185,6 +199,27 @@ test('the render pipeline cuts, concatenates, burns captions and muxes a real MP
   assert.match(ass, /^Style: Caption,/m);
   const cues = ass.split('\n').filter((line) => line.startsWith('Dialogue:'));
   assert.ok(cues.length >= result.sections, `expected caption cues, found ${cues.length}`);
+
+  // The .srt sidecar (uploaded as the YouTube caption track) reuses those exact cues and timings.
+  assert.equal(result.subtitlePath, subtitlePath);
+  const srt = fs.readFileSync(subtitlePath, 'utf8');
+  const blocks = srt.trim().split(/\n\n+/);
+  assert.equal(blocks.length, cues.length, 'the .srt has one block per burned-in cue');
+  assert.match(blocks[0]!, /^1\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n/);
+
+  const [, firstStart, firstEnd] = cues[0]!.split(',');
+  const [srtStart, srtEnd] = blocks[0]!.split('\n')[1]!.split(' --> ');
+  assert.ok(
+    Math.abs(srtTimestamp(srtStart!) - assTimestamp(firstStart!.trim())) < 0.01 &&
+      Math.abs(srtTimestamp(srtEnd!) - assTimestamp(firstEnd!.trim())) < 0.01,
+    'the first .srt cue starts and ends where the burned caption does',
+  );
+
+  const lastEnd = srtTimestamp(blocks.at(-1)!.split('\n')[1]!.split(' --> ')[1]!);
+  assert.ok(
+    lastEnd <= audioDuration + 0.01,
+    `the transcript ends with the audio (${lastEnd.toFixed(2)}s vs ${audioDuration.toFixed(2)}s)`,
+  );
 
   // Burn-in can silently fall back, so prove it in the pixels. Every source clip is a solid colour
   // (luma < 170), so near-white pixels can only be caption text.

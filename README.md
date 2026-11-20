@@ -93,6 +93,7 @@ All values live in `backend/.env` (loaded from the working directory). See `back
 | `YT_AUDIT_PASSED` | `true` **only** after Google approves the compliance audit |
 | `YT_DISCLOSE_SYNTHETIC_MEDIA` | Sends `status.containsSyntheticMedia: true` on upload and publish; keep it on (default `true`) |
 | `YT_CATEGORY_ID`, `MAX_UPLOADS_PER_DAY` | Upload defaults (default 6/day quota guard) |
+| `YT_CAPTION_LANGUAGE` | BCP-47 language of the caption track uploaded from the rendered `.srt` (default `en`) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Admin alerts (failure + draft-ready notifications) |
 | `SCHEDULER_ENABLED`, `CRON_SCHEDULE`, `CRON_TIMEZONE` | node-cron daily run (18:00 Asia/Kolkata by default) |
 | `PIPELINE_CATCH_UP_HOURS` | Boot catch-up threshold: run once if the newest run is older than this (default 24, match the cron period) |
@@ -140,11 +141,11 @@ If Edge TTS is unreachable and `GOOGLE_TTS_KEY` is set, Google Cloud TTS is trie
    - Authorised JavaScript origin: `http://localhost:3000`
    - Authorised redirect URI: `http://localhost:3000/api/youtube/callback`
 5. Copy the client ID/secret into `YT_CLIENT_ID` / `YT_CLIENT_SECRET`.
-6. Restart the API, open the app, click **Connect channel**, and grant the `youtube.upload` + `youtube` scopes. The refresh token is stored in `oauth_tokens`.
+6. Restart the API, open the app, click **Connect channel**, and grant the `youtube.upload` + `youtube` + `youtube.force-ssl` scopes. The refresh token is stored in `oauth_tokens`. `youtube.force-ssl` is what `captions.insert` accepts — a channel connected before this scope was added must be reconnected once, or the caption track is silently skipped with a warning.
 
 The callback redirects to `/?youtube=connected` (or `/?youtube=error&reason=…`).
 
-**Quota:** `videos.insert` costs 1,600 units of the default 10,000/day → 6 uploads maximum. The API counts uploads from the last 24 hours and refuses to exceed `MAX_UPLOADS_PER_DAY` (hard-capped at 6). `thumbnails.set` costs 50 units.
+**Quota:** `videos.insert` costs 1,600 units of the default 10,000/day → 6 uploads maximum. The caption track adds 400 units per upload (`captions.insert`), so the six daily uploads' captions cost 2,400 of the shared 10,000. The API counts uploads from the last 24 hours and refuses to exceed `MAX_UPLOADS_PER_DAY` (hard-capped at 6). `thumbnails.set` costs 50 units.
 
 **Compliance:** uploads are forced to `private` unless you explicitly choose `unlisted`. Publishing to `public` is a separate endpoint that requires (a) a recorded human approval and (b) `YT_AUDIT_PASSED=true`. Do not flip that flag until Google has audited your app.
 
@@ -287,6 +288,12 @@ a Postgres advisory lock), so concurrent requests cannot both take the last slot
 released again when the upload fails, and becomes the recorded `uploaded_at` when it succeeds.
 Exhausted quota answers `429`.
 
+**The upload also sends the caption track.** The rendered `.srt` sidecar is uploaded with
+`captions.insert` after the video exists, so the searchable transcript is the script rather than
+YouTube's auto-captions. It is best effort: if the track is rejected the video stays uploaded and the
+warning is logged, because failing the request would report a real upload as a failure and hand its
+quota slot back.
+
 Approval is enforced in the store layer (`backend/src/db/approval.ts`): any write to the script,
 audio, render, caption, thumbnail, SEO metadata, topic or YouTube id clears `approved_at` and
 `approved_by` in the same update, so an approved video must be approved again after it changes.
@@ -304,7 +311,7 @@ Errors are JSON: `{ "error": "message" }` with a matching HTTP status.
 3. For each section, keywords are extracted, Pexels is searched, and the first **unused** clip is downloaded. `used_clips` is queried before use and written after a segment succeeds — the dedupe ledger survives restarts.
 4. Each clip is looped, scaled/cropped to 1920×1080, normalised to 30 fps H.264 and cut to the section duration.
 5. Segments are concatenated with the concat demuxer.
-6. Captions are written as a `.ass` sidecar and burned in via libass (`subtitles` filter).
+6. Captions are written as a `.ass` sidecar and burned in via libass (`subtitles` filter). The same cues and timings are written as an `.srt` sidecar too, which is what the upload sends as the caption track.
 7. The MP3 is muxed in with AAC 192 kbps, `-shortest`, `+faststart` → `uploads/videos/{videoId}.mp4`.
 8. Progress is written to `render_jobs` for `GET /api/status/:jobId`; every step is logged to `job_logs`.
 

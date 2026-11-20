@@ -1,5 +1,6 @@
+import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { config } from '../config.js';
+import { config, paths } from '../config.js';
 import { getStore } from '../db/index.js';
 import { logStep } from '../services/jobLog.js';
 import {
@@ -131,6 +132,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         tags: video.seo_tags ?? [],
         privacyStatus,
         thumbnailPath: video.thumbnail_path,
+        // Written by the render from the same cues as the burned captions.
+        subtitlePath: path.join(paths.videos, `${videoId}.srt`),
         quotaClaimed: true,
       });
       uploaded = true;
@@ -151,7 +154,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         videoId,
         'upload',
         'success',
-        `Uploaded as ${result.privacyStatus}: ${result.url}${result.thumbnailApplied ? ' (thumbnail set)' : ''}. ${disclosure}`,
+        `Uploaded as ${result.privacyStatus}: ${result.url}${result.thumbnailApplied ? ' (thumbnail set)' : ''}` +
+          `${result.captionsUploaded ? ' (caption track uploaded)' : ''}. ${disclosure}`,
       );
 
       return {
@@ -159,6 +163,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         privacyStatus: result.privacyStatus,
         url: result.url,
         thumbnailApplied: result.thumbnailApplied,
+        captionsUploaded: result.captionsUploaded,
         syntheticMediaDisclosure: result.syntheticMediaDisclosed,
         video: serializeVideo(updated),
         approvalRequired: true,

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import type { youtube_v3 } from 'googleapis';
 import { config } from '../config.js';
 import { getStore } from '../db/index.js';
@@ -9,6 +10,9 @@ import { errorMessage, logger } from '../utils/logger.js';
 const SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube',
+  // captions.insert accepts only youtube.force-ssl (or youtubepartner); the plain `youtube` scope is
+  // not enough, so the caption track needs this one too.
+  'https://www.googleapis.com/auth/youtube.force-ssl',
 ];
 
 export type UploadPrivacy = 'private' | 'unlisted';
@@ -163,6 +167,8 @@ export interface UploadInput {
   tags: string[];
   privacyStatus: UploadPrivacy;
   thumbnailPath?: string | null;
+  /** SubRip sidecar from the render, uploaded as the video's caption track. */
+  subtitlePath?: string | null;
   /**
    * The caller already reserved a quota slot atomically (POST /api/upload does), so this function
    * must not re-check the count: the reservation itself is counted and would look exhausted.
@@ -175,8 +181,56 @@ export interface UploadResult {
   url: string;
   privacyStatus: UploadPrivacy;
   thumbnailApplied: boolean;
+  /** Whether the .srt sidecar became a caption track on the new video. */
+  captionsUploaded: boolean;
   /** Whether the upload told YouTube it contains altered/synthetic media. */
   syntheticMediaDisclosed: boolean;
+}
+
+/**
+ * Uploads the rendered .srt as a caption track.
+ *
+ * Best effort on purpose: the video already exists by now, so a caption failure must not fail the
+ * upload (that would report an uploaded video as a failed one and hand its quota slot back). Without
+ * this track YouTube falls back to its own auto-captions, which are not the script.
+ */
+async function uploadCaptionTrack(
+  youtube: youtube_v3.Youtube,
+  youtubeVideoId: string,
+  subtitlePath: string,
+): Promise<boolean> {
+  const stats = await fsp.stat(subtitlePath).catch(() => null);
+  if (!stats || stats.size === 0) {
+    logger.warn(
+      `No caption sidecar at ${path.basename(subtitlePath)}; the video was uploaded without a caption track.`,
+    );
+    return false;
+  }
+
+  const media = fs.createReadStream(subtitlePath);
+  try {
+    await youtube.captions.insert(
+      {
+        part: ['snippet'],
+        requestBody: {
+          snippet: {
+            videoId: youtubeVideoId,
+            language: config.ytCaptionLanguage,
+            name: 'Scripted narration',
+          },
+        },
+        // YouTube takes the SubRip file as a plain-text upload.
+        media: { mimeType: 'text/plain', body: media },
+      },
+      { timeout: 2 * 60 * 1000 },
+    );
+    return true;
+  } catch (error) {
+    logger.warn(`Video uploaded but the caption track was rejected: ${errorMessage(error)}`);
+    return false;
+  } finally {
+    media.destroy();
+  }
 }
 
 export async function uploadToYouTube(input: UploadInput): Promise<UploadResult> {
@@ -250,6 +304,9 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
     url: `https://youtu.be/${youtubeVideoId}`,
     privacyStatus: input.privacyStatus,
     thumbnailApplied,
+    captionsUploaded: input.subtitlePath
+      ? await uploadCaptionTrack(youtube, youtubeVideoId, input.subtitlePath)
+      : false,
     syntheticMediaDisclosed: config.ytDiscloseSyntheticMedia,
   };
 }
