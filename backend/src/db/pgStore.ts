@@ -469,9 +469,13 @@ export class PgStore implements Store {
   async releaseUploadSlot(videoId: string, reservedAt: string): Promise<void> {
     if (!isUuid(videoId)) return;
     // Scoped to the exact reservation: never frees a slot that already produced a YouTube video.
+    // Compared to the millisecond because that is the precision a reservation is written with, while
+    // Postgres timestamps carry microseconds: a stamp produced by SQL (`now()`) comes back through
+    // the driver truncated to milliseconds and would otherwise never match its own column value.
     await this.pool.query(
       `UPDATE videos SET uploaded_at = NULL
-       WHERE id = $1 AND uploaded_at = $2 AND youtube_video_id IS NULL`,
+       WHERE id = $1 AND youtube_video_id IS NULL
+         AND date_trunc('milliseconds', uploaded_at) = date_trunc('milliseconds', $2::timestamptz)`,
       [videoId, reservedAt],
     );
   }
