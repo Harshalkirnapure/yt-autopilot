@@ -418,10 +418,21 @@ function renderHealth(health) {
   // The newest pipeline_runs row: whether today's run happened, and why it did not. A skip is the
   // schedule working as intended, so only a failure is shown as bad.
   const run = health.pipeline;
-  const runTone = !run ? 'warn' : run.status === 'completed' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn';
+  // `silent` is decided by the server from the newest completed run: red even when the last row says
+  // "skipped", because a channel that stopped producing is the failure worth seeing.
+  const runTone = !run
+    ? 'warn'
+    : run.silent
+      ? 'bad'
+      : run.status === 'completed'
+        ? 'ok'
+        : run.status === 'failed'
+          ? 'bad'
+          : 'warn';
   setChip('chip-pipeline', run ? `Last run ${run.status}` : 'No run yet', runTone);
   $('chip-pipeline').title = run
     ? [
+        run.silent ? `Silent: nothing produced in the last ${run.silenceHours} h.` : '',
         `Trigger: ${run.trigger}`,
         `Started: ${new Date(run.startedAt).toLocaleString()}`,
         run.finishedAt ? `Finished: ${new Date(run.finishedAt).toLocaleString()}` : 'Not finished',

@@ -41,6 +41,7 @@ const files = [
   'test/uploadIdempotency.test.ts',
   'test/auth.test.ts',
   'test/pipelineRuns.test.ts',
+  'test/alerts.test.ts',
   'test/startupConfig.test.ts',
   'test/reconciliation.test.ts',
   'test/publish.test.ts',

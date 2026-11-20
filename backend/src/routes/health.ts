@@ -5,10 +5,24 @@ import { checkFfmpegAvailable, ffmpegBinary } from '../services/ffmpeg.js';
 import { schedulerStatus } from '../services/scheduler.js';
 import { uploadQuota } from '../services/youtube.js';
 
+/**
+ * A channel that has produced nothing inside the threshold has silently stopped: the cron tick may be
+ * dead, the process may not be running, or every run is failing. A fresh ledger is not silent —
+ * there is no history to measure yet.
+ */
+export function pipelineSilent(lastActivityAt: string | null, now: Date, thresholdMs: number): boolean {
+  if (!lastActivityAt) return false;
+  return Date.parse(lastActivityAt) < now.getTime() - thresholdMs;
+}
+
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/health', async () => {
     const store = getStore();
     const lastRun = await store.latestPipelineRun();
+    const lastCompleted = await store.latestCompletedPipelineRun();
+    // Silence is measured from the last video actually produced; before any completed run, any
+    // finished attempt is the best evidence the channel is still alive.
+    const lastActivityAt = lastCompleted?.finished_at ?? lastRun?.finished_at ?? lastRun?.started_at ?? null;
     return {
       ok: true,
       time: new Date().toISOString(),
@@ -27,6 +41,8 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
             startedAt: lastRun.started_at,
             finishedAt: lastRun.finished_at,
             reason: lastRun.reason,
+            silent: pipelineSilent(lastActivityAt, new Date(), config.pipelineSilentMs),
+            silenceHours: Math.max(1, Math.round(config.pipelineSilentMs / 3_600_000)),
           }
         : null,
       defaults: {

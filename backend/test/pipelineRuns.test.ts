@@ -1,7 +1,9 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { closeStore, getStore, initStore } from '../src/db/index.js';
+import type { PipelineRunRow } from '../src/db/types.js';
 import { runDaily, type PipelineTrigger } from '../src/services/pipeline.js';
+import { pipelineSilent } from '../src/routes/health.js';
 import { catchUpScheduledRun } from '../src/services/scheduler.js';
 import { buildServer } from '../src/server.js';
 
@@ -114,12 +116,65 @@ test('the newest ledger row is visible on /api/health', async () => {
     assert.equal(pipeline.reason, 'Already generated today.');
     assert.ok(pipeline.startedAt, 'the start time is reported');
     assert.ok(pipeline.finishedAt, 'the end time is reported');
+    assert.equal(pipeline.silent, false, 'a fresh run is not a silent channel');
+    assert.equal(pipeline.silenceHours, 30, 'the threshold is published with the flag');
     assert.deepEqual(
       Object.keys(pipeline).sort(),
-      ['finishedAt', 'reason', 'startedAt', 'status', 'trigger'],
+      ['finishedAt', 'reason', 'silenceHours', 'silent', 'startedAt', 'status', 'trigger'],
       'the public payload carries schedule facts only',
     );
   } finally {
+    await app.close();
+  }
+});
+
+test('silence is measured from the last completed run, and an empty ledger is not silent', () => {
+  const now = new Date('2026-11-20T12:00:00.000Z');
+  const hours = 60 * 60 * 1000;
+
+  assert.equal(pipelineSilent(null, now, 30 * hours), false, 'nothing has run yet: nothing to alarm');
+  assert.equal(
+    pipelineSilent(new Date(now.getTime() - 29 * hours).toISOString(), now, 30 * hours),
+    false,
+    'inside the threshold is healthy',
+  );
+  assert.equal(
+    pipelineSilent(new Date(now.getTime() - 31 * hours).toISOString(), now, 30 * hours),
+    true,
+    'past the threshold the channel has stopped',
+  );
+});
+
+test('the pipeline chip is bad when the newest completed run is over 30 hours old', async () => {
+  const store = getStore();
+  const app = await buildServer();
+  await app.ready();
+
+  const latest = await store.latestPipelineRun();
+  assert.ok(latest, 'an earlier test left a ledger row');
+  const row: PipelineRunRow = { ...latest, status: 'completed', finished_at: latest.started_at };
+  const original = store.latestCompletedPipelineRun;
+
+  const health = async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/health' });
+    assert.equal(response.statusCode, 200);
+    return response.json().pipeline;
+  };
+
+  try {
+    store.latestCompletedPipelineRun = async () => ({
+      ...row,
+      finished_at: new Date(Date.now() - 31 * 60 * 60 * 1000).toISOString(),
+    });
+    assert.equal((await health()).silent, true, '31 hours without a video is a stopped channel');
+
+    store.latestCompletedPipelineRun = async () => ({
+      ...row,
+      finished_at: new Date(Date.now() - 29 * 60 * 60 * 1000).toISOString(),
+    });
+    assert.equal((await health()).silent, false, '29 hours is still normal for a daily channel');
+  } finally {
+    store.latestCompletedPipelineRun = original;
     await app.close();
   }
 });

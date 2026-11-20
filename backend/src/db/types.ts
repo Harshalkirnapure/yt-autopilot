@@ -200,6 +200,8 @@ export interface Store {
   finishPipelineRun(id: string, patch: FinishPipelineRunPatch): Promise<PipelineRunRow>;
   /** Newest run by `started_at`, whatever its status. */
   latestPipelineRun(): Promise<PipelineRunRow | null>;
+  /** Newest run that finished as `completed` by `finished_at`: the last video actually produced. */
+  latestCompletedPipelineRun(): Promise<PipelineRunRow | null>;
   /** Rows still `running` whose `started_at` is older than `cutoff` (ISO): the process died. */
   listStalePipelineRuns(cutoff: string, limit?: number): Promise<PipelineRunRow[]>;
   /**

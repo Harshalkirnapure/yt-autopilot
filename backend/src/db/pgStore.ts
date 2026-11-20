@@ -349,6 +349,16 @@ export class PgStore implements Store {
     return rows[0] ?? null;
   }
 
+  async latestCompletedPipelineRun(): Promise<PipelineRunRow | null> {
+    const { rows } = await this.pool.query<PipelineRunRow>(
+      `SELECT ${PIPELINE_RUN_COLUMNS} FROM pipeline_runs
+       WHERE status = 'completed' AND finished_at IS NOT NULL
+       ORDER BY finished_at DESC
+       LIMIT 1`,
+    );
+    return rows[0] ?? null;
+  }
+
   async listStalePipelineRuns(cutoff: string, limit = 100): Promise<PipelineRunRow[]> {
     const { rows } = await this.pool.query<PipelineRunRow>(
       `SELECT ${PIPELINE_RUN_COLUMNS} FROM pipeline_runs

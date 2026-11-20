@@ -482,6 +482,11 @@ test('pipeline runs are recorded and the advisory lock is exclusive', async () =
   assert.equal(finished.status, 'completed');
   assert.ok(finished.finished_at);
   assert.equal((await store.latestPipelineRun())?.id, run.id);
+  assert.equal(
+    (await store.latestCompletedPipelineRun())?.id,
+    run.id,
+    'the newest completed run is what the silence check reads',
+  );
 
   const release = await store.acquirePipelineLock();
   assert.ok(release, 'the first holder gets the lock');

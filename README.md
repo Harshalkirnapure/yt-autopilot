@@ -94,9 +94,10 @@ All values live in `backend/.env` (loaded from the working directory). See `back
 | `YT_DISCLOSE_SYNTHETIC_MEDIA` | Sends `status.containsSyntheticMedia: true` on upload and publish; keep it on (default `true`) |
 | `YT_CATEGORY_ID`, `MAX_UPLOADS_PER_DAY` | Upload defaults (default 6/day quota guard) |
 | `YT_CAPTION_LANGUAGE` | BCP-47 language of the caption track uploaded from the rendered `.srt` (default `en`) |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Admin alerts (failure + draft-ready notifications) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Admin alerts (failure + draft-ready notifications). Unset, each alert is stored as an `alert` row in the activity log instead |
 | `SCHEDULER_ENABLED`, `CRON_SCHEDULE`, `CRON_TIMEZONE` | node-cron daily run (18:00 Asia/Kolkata by default) |
 | `PIPELINE_CATCH_UP_HOURS` | Boot catch-up threshold: run once if the newest run is older than this (default 24, match the cron period) |
+| `PIPELINE_SILENT_HOURS` | No completed run for this long marks the pipeline chip bad (default 30, one daily period plus slack) |
 | `DEFAULT_NICHE`, `DEFAULT_AUDIENCE`, `DEFAULT_LANGUAGE`, `DEFAULT_SCRIPT_LENGTH` | Scheduler defaults (the UI sends its own values) |
 | `FFMPEG_PATH`, `FFPROBE_PATH`, `RENDER_TIMEOUT_MS` | Binary overrides + per-command timeout |
 
@@ -185,6 +186,15 @@ If the server was down at the scheduled time, the tick is simply lost. On boot w
 `SCHEDULER_ENABLED=true`, `catchUpScheduledRun()` looks at the newest ledger row and starts **one**
 run when it is older than `PIPELINE_CATCH_UP_HOURS` (default 24 h, so it matches a daily cron).
 Startups close to the scheduled time or shortly after a normal run do nothing.
+
+### A channel that silently stopped is visible in the header
+
+The status chip reads the same ledger: `GET /api/health` reports `pipeline.silent` when the newest
+*completed* run (the last video actually produced) finished more than `PIPELINE_SILENT_HOURS` ago —
+30 hours by default, one daily period plus slack. A channel whose cron died, whose process is down,
+or whose runs all fail therefore turns the chip **red** even though its last ledger row may say
+`skipped`. With no ledger history at all the chip stays amber (`No run yet`): nothing has happened
+yet, which is not the same as something having stopped.
 
 Manual dry run (creates a real draft and waits for the render):
 

@@ -128,6 +128,9 @@ export const config = {
   // A run only closes its ledger row when it finishes (minutes, not hours; the render it enqueues is
   // tracked separately), so a row still `running` after this long belongs to a dead process.
   pipelineStaleRunMs: envNumber('PIPELINE_STALE_RUN_MINUTES', 120) * 60 * 1000,
+  // A channel with no completed run for this long has silently stopped (cron dead, process down,
+  // every run failing) and the status chip turns red (PIPELINE_SILENT_HOURS, default 30).
+  pipelineSilentMs: envNumber('PIPELINE_SILENT_HOURS', 30) * 60 * 60 * 1000,
   defaultNiche: envString('DEFAULT_NICHE', 'personal finance'),
   defaultAudience: envString('DEFAULT_AUDIENCE', 'young professionals in India'),
   defaultLanguage: envString('DEFAULT_LANGUAGE', 'English (India), conversational'),

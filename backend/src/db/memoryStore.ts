@@ -260,6 +260,13 @@ export class MemoryStore implements Store {
     return newest ? { ...newest } : null;
   }
 
+  async latestCompletedPipelineRun(): Promise<PipelineRunRow | null> {
+    const newest = this.pipelineRuns
+      .filter((row) => row.status === 'completed' && row.finished_at !== null)
+      .sort((a, b) => Date.parse(b.finished_at!) - Date.parse(a.finished_at!))[0];
+    return newest ? { ...newest } : null;
+  }
+
   async listStalePipelineRuns(cutoff: string, limit = 100): Promise<PipelineRunRow[]> {
     const cutoffMs = Date.parse(cutoff);
     return this.pipelineRuns

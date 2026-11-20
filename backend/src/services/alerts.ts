@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { errorMessage, logger } from '../utils/logger.js';
+import { logStep } from './jobLog.js';
 
 export function alertsConfigured(): boolean {
   return Boolean(config.telegramBotToken && config.telegramChatId);
@@ -10,7 +11,9 @@ export async function notifyAdmin(message: string, level: 'info' | 'error' = 'in
   const text = `${level === 'error' ? '🚨 YT AutoPilot error' : '✅ YT AutoPilot'}\n${message}`;
 
   if (!alertsConfigured()) {
-    logger.warn(`Admin alert skipped (Telegram not configured): ${message}`);
+    // Without Telegram an alert used to exist only in the process log: invisible in the UI and lost
+    // on restart. Persist it as an activity-log row so a stopped channel still shows what happened.
+    await logStep(null, 'alert', level === 'error' ? 'warning' : 'info', message);
     return;
   }
 
