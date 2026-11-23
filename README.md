@@ -24,6 +24,16 @@ Nothing here downloads or re-uploads third-party YouTube videos. Visuals come on
 
 ---
 
+## Screenshots
+
+![The studio: channel setup, topic research and the run summary](docs/screenshots/studio.png)
+
+![The review step: private-only upload, caption-track outcome and the separate human approval gate](docs/screenshots/review-step.png)
+
+From a local run against Postgres with two seeded drafts.
+
+---
+
 ## 1. Prerequisites
 
 - **Node.js 20.11+** (built and tested with Node 24)
