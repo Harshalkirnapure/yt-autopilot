@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { config, paths } from '../config.js';
 import { getStore } from '../db/index.js';
+import { alertOnCaptionFailureStreak } from '../services/alerts.js';
 import { logStep } from '../services/jobLog.js';
 import {
   buildAuthUrl,
@@ -11,6 +12,7 @@ import {
   uploadQuota,
   uploadToYouTube,
   youtubeConfigured,
+  type UploadDependencies,
   type UploadPrivacy,
 } from '../services/youtube.js';
 import { badRequest, conflict, forbidden, notFound, tooManyRequests } from '../utils/errors.js';
@@ -21,7 +23,21 @@ import { optionalBoolean, optionalEnum, requireString } from '../utils/validate.
 /** In-process guard so a double-click is rejected before it can reserve a quota slot. */
 const uploadsInFlight = new Set<string>();
 
-export async function uploadRoutes(app: FastifyInstance): Promise<void> {
+export interface UploadRouteOptions {
+  /**
+   * Test seam: a ready-made YouTube client for the upload, so a route-level test can drive
+   * POST /api/upload without a channel. Production never sets it, so the route keeps using the
+   * stored-token client.
+   */
+  uploadDependencies?: UploadDependencies;
+}
+
+export async function uploadRoutes(
+  app: FastifyInstance,
+  options: UploadRouteOptions = {},
+): Promise<void> {
+  const uploadDependencies = options.uploadDependencies ?? {};
+
   app.get('/api/youtube/auth', async (request, reply) => {
     const url = await buildAuthUrl();
     const query = request.query as { redirect?: string };
@@ -135,7 +151,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         // Written by the render from the same cues as the burned captions.
         subtitlePath: path.join(paths.videos, `${videoId}.srt`),
         quotaClaimed: true,
-      });
+      }, uploadDependencies);
       uploaded = true;
 
       const updated = await store.updateVideo(videoId, {
@@ -144,6 +160,10 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         status: 'uploaded',
         uploaded_at: new Date().toISOString(),
         error: null,
+        // Kept on the row: a caption track that silently stops uploading must be visible later, in
+        // the API and the review step, not only in this process's log.
+        captions_uploaded: result.captionsUploaded,
+        caption_error: result.captionError,
       });
 
       const disclosure = result.syntheticMediaDisclosed
@@ -158,12 +178,27 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           `${result.captionsUploaded ? ' (caption track uploaded)' : ''}. ${disclosure}`,
       );
 
+      if (!result.captionsUploaded) {
+        await logStep(
+          videoId,
+          'caption',
+          'warning',
+          `Caption track not uploaded: ${result.captionError ?? 'unknown error'}`,
+        );
+        // Best effort: an alert must never turn a successful upload into a failed request.
+        const streak = await store.captionFailureStreak();
+        await alertOnCaptionFailureStreak(streak, result.captionError).catch((alertError: unknown) =>
+          logger.warn(`Could not raise the caption failure alert: ${errorMessage(alertError)}`),
+        );
+      }
+
       return {
         youtubeVideoId: result.youtubeVideoId,
         privacyStatus: result.privacyStatus,
         url: result.url,
         thumbnailApplied: result.thumbnailApplied,
         captionsUploaded: result.captionsUploaded,
+        captionError: result.captionError,
         syntheticMediaDisclosure: result.syntheticMediaDisclosed,
         video: serializeVideo(updated),
         approvalRequired: true,

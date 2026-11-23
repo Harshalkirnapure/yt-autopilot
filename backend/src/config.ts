@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseEncryptionKey } from './utils/tokenCipher.js';
 
 /** backend/ directory, both when running from src (tsx) and from dist (node). */
 const backendRoot = path.resolve(import.meta.dirname, '..');
@@ -84,6 +85,8 @@ export const config = {
   // Persistence
   databaseUrl: envString('DATABASE_URL'),
   databaseSsl: envBool('DATABASE_SSL', false),
+  // Encrypts the YouTube OAuth access/refresh tokens in `oauth_tokens` (required in production).
+  tokenEncryptionKey: envString('TOKEN_ENCRYPTION_KEY'),
   redisUrl: envString('REDIS_URL'),
   runWorker: envBool('RUN_WORKER', true),
 
@@ -113,6 +116,8 @@ export const config = {
   ytCategoryId: envString('YT_CATEGORY_ID', '22'),
   // BCP-47 code of the uploaded caption track (the narration is English unless you change TTS).
   ytCaptionLanguage: envString('YT_CAPTION_LANGUAGE', 'en'),
+  // Consecutive uploads without a caption track before the admin is alerted (and on each multiple).
+  captionFailureAlertThreshold: envNumber('CAPTION_FAILURE_ALERT_THRESHOLD', 3),
   maxUploadsPerDay: envNumber('MAX_UPLOADS_PER_DAY', 6),
 
   // Admin alerts
@@ -158,6 +163,45 @@ export function assertProductionStoreConfig(input: { nodeEnv: string; databaseUr
       'while resetting the topic and clip dedupe ledgers. Set DATABASE_URL (see backend/.env.example) ' +
       'or unset NODE_ENV to run in development.',
   );
+}
+
+let cachedTokenKey: Buffer | null | undefined;
+
+/**
+ * The AES-256-GCM key for the stored OAuth tokens, or null when none is configured (development and
+ * tests). Parsed once; a malformed key throws here with the expected format.
+ */
+export function tokenEncryptionKey(): Buffer | null {
+  if (cachedTokenKey === undefined) {
+    const raw = config.tokenEncryptionKey.trim();
+    cachedTokenKey = raw === '' ? null : parseEncryptionKey(raw);
+  }
+  return cachedTokenKey;
+}
+
+/**
+ * Production must not keep refresh tokens in plaintext: one database dump or backup would hand over
+ * permanent access to the channel. Elsewhere the key is optional so local runs need no setup, but a
+ * key that is present must be usable.
+ */
+export function assertTokenEncryptionConfig(input: {
+  nodeEnv: string;
+  tokenEncryptionKey: string;
+}): void {
+  const isProduction = input.nodeEnv.trim().toLowerCase() === 'production';
+  const raw = input.tokenEncryptionKey.trim();
+
+  if (raw === '') {
+    if (!isProduction) return;
+    throw new Error(
+      'Refusing to start: NODE_ENV=production requires TOKEN_ENCRYPTION_KEY, otherwise the YouTube ' +
+        'OAuth access and refresh tokens are stored in plaintext. Generate one with ' +
+        '"openssl rand -base64 32" and set it in backend/.env (see backend/.env.example). Existing ' +
+        'plaintext rows stay readable and are encrypted the next time the tokens are written.',
+    );
+  }
+
+  parseEncryptionKey(raw);
 }
 
 /**

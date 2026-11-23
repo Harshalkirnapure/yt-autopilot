@@ -230,6 +230,10 @@ body {
   line-height: 1.5;
 }
 
+.meta.warn {
+  color: var(--warn);
+}
+
 .subhead {
   margin: 14px 0 8px;
   font-size: 10.5px;

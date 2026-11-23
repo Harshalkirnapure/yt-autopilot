@@ -183,8 +183,28 @@ export interface UploadResult {
   thumbnailApplied: boolean;
   /** Whether the .srt sidecar became a caption track on the new video. */
   captionsUploaded: boolean;
+  /**
+   * Why the caption track is missing, when it is — persisted on the video row so a regression is
+   * visible long after this request. Null when the track uploaded or none was sent.
+   */
+  captionError: string | null;
   /** Whether the upload told YouTube it contains altered/synthetic media. */
   syntheticMediaDisclosed: boolean;
+}
+
+export interface CaptionUploadOutcome {
+  uploaded: boolean;
+  /** Persisted on the video row; null when the track was accepted. */
+  error: string | null;
+}
+
+/** Long enough to diagnose, short enough for a TEXT column, a log line and an alert. */
+const CAPTION_ERROR_LIMIT = 500;
+
+function captionFailure(message: string): CaptionUploadOutcome {
+  const error = message.trim().slice(0, CAPTION_ERROR_LIMIT) || 'YouTube rejected the caption track.';
+  logger.warn(`Video uploaded but the caption track was not: ${error}`);
+  return { uploaded: false, error };
 }
 
 /**
@@ -192,19 +212,17 @@ export interface UploadResult {
  *
  * Best effort on purpose: the video already exists by now, so a caption failure must not fail the
  * upload (that would report an uploaded video as a failed one and hand its quota slot back). Without
- * this track YouTube falls back to its own auto-captions, which are not the script.
+ * this track YouTube falls back to its own auto-captions, which are not the script — so the reason is
+ * returned rather than only logged.
  */
 async function uploadCaptionTrack(
   youtube: youtube_v3.Youtube,
   youtubeVideoId: string,
   subtitlePath: string,
-): Promise<boolean> {
+): Promise<CaptionUploadOutcome> {
   const stats = await fsp.stat(subtitlePath).catch(() => null);
   if (!stats || stats.size === 0) {
-    logger.warn(
-      `No caption sidecar at ${path.basename(subtitlePath)}; the video was uploaded without a caption track.`,
-    );
-    return false;
+    return captionFailure(`No caption sidecar at ${path.basename(subtitlePath)} for this render.`);
   }
 
   const media = fs.createReadStream(subtitlePath);
@@ -224,16 +242,26 @@ async function uploadCaptionTrack(
       },
       { timeout: 2 * 60 * 1000 },
     );
-    return true;
+    return { uploaded: true, error: null };
   } catch (error) {
-    logger.warn(`Video uploaded but the caption track was rejected: ${errorMessage(error)}`);
-    return false;
+    return captionFailure(errorMessage(error));
   } finally {
     media.destroy();
   }
 }
 
-export async function uploadToYouTube(input: UploadInput): Promise<UploadResult> {
+/**
+ * Test seam: a ready-made client skips the stored-token OAuth flow (which needs a real channel).
+ * Production never passes it, so `getAuthorizedClient()` stays mandatory for real uploads.
+ */
+export interface UploadDependencies {
+  youtube?: youtube_v3.Youtube;
+}
+
+export async function uploadToYouTube(
+  input: UploadInput,
+  deps: UploadDependencies = {},
+): Promise<UploadResult> {
   if (!fs.existsSync(input.filePath)) {
     throw badRequest('The rendered MP4 is missing from disk. Render the video again before uploading.');
   }
@@ -247,9 +275,12 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
     }
   }
 
-  const auth = await getAuthorizedClient();
-  const { google } = await loadGoogle();
-  const youtube = google.youtube({ version: 'v3', auth });
+  let youtube = deps.youtube;
+  if (!youtube) {
+    const auth = await getAuthorizedClient();
+    const { google } = await loadGoogle();
+    youtube = google.youtube({ version: 'v3', auth });
+  }
 
   // The read stream must be released even when videos.insert rejects, otherwise a failed
   // upload keeps the MP4 open (and locked on Windows) for the life of the process.
@@ -299,14 +330,17 @@ export async function uploadToYouTube(input: UploadInput): Promise<UploadResult>
     }
   }
 
+  const caption = input.subtitlePath
+    ? await uploadCaptionTrack(youtube, youtubeVideoId, input.subtitlePath)
+    : { uploaded: false, error: null };
+
   return {
     youtubeVideoId,
     url: `https://youtu.be/${youtubeVideoId}`,
     privacyStatus: input.privacyStatus,
     thumbnailApplied,
-    captionsUploaded: input.subtitlePath
-      ? await uploadCaptionTrack(youtube, youtubeVideoId, input.subtitlePath)
-      : false,
+    captionsUploaded: caption.uploaded,
+    captionError: caption.error,
     syntheticMediaDisclosed: config.ytDiscloseSyntheticMedia,
   };
 }

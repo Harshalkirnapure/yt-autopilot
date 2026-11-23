@@ -7,14 +7,16 @@ import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { authenticate } from './auth.js';
 import { config, configStatus, inlineRenderWarning, paths } from './config.js';
 import { closeStore, initStore } from './db/index.js';
-import { registerRoutes } from './routes/index.js';
+import { registerRoutes, type RouteOptions } from './routes/index.js';
 import { reconcileOnBoot } from './services/reconciliation.js';
 import { closeRenderQueue, interruptActiveRenders, startRenderWorker } from './services/renderService.js';
 import { catchUpScheduledRun, startScheduler, stopScheduler } from './services/scheduler.js';
 import { AppError } from './utils/errors.js';
 import { errorMessage, logger } from './utils/logger.js';
 
-export async function buildServer(): Promise<FastifyInstance> {
+export type BuildServerOptions = RouteOptions;
+
+export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false,
     bodyLimit: 30 * 1024 * 1024, // canvas thumbnails arrive as base64 data URLs
@@ -69,7 +71,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     });
   });
 
-  await app.register(registerRoutes);
+  await app.register(registerRoutes, { uploadDependencies: options.uploadDependencies });
 
   return app;
 }

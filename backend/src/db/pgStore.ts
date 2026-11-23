@@ -1,5 +1,7 @@
 import type { Pool } from 'pg';
+import { tokenEncryptionKey } from '../config.js';
 import { notFound } from '../utils/errors.js';
+import { decryptSecret, encryptSecret } from '../utils/tokenCipher.js';
 import { applyApprovalRule } from './approval.js';
 import type {
   CreateVideoInput,
@@ -40,6 +42,8 @@ const VIDEO_COLUMNS: Record<keyof VideoPatch, string> = {
   video_path: 'video_path',
   caption_path: 'caption_path',
   thumbnail_path: 'thumbnail_path',
+  captions_uploaded: 'captions_uploaded',
+  caption_error: 'caption_error',
   seo_title: 'seo_title',
   seo_description: 'seo_description',
   seo_tags: 'seo_tags',
@@ -176,6 +180,9 @@ export class PgStore implements Store {
   }
 
   async saveTokens(tokens: SaveTokensInput): Promise<void> {
+    // Tokens are encrypted before they reach the database; the key lives in TOKEN_ENCRYPTION_KEY and
+    // never in a row, so a dump of `oauth_tokens` alone is useless.
+    const key = tokenEncryptionKey();
     await this.pool.query(
       `INSERT INTO oauth_tokens (id, access_token, refresh_token, expiry_date, channel_id)
        VALUES ($1, $2, $3, $4, $5)
@@ -187,8 +194,8 @@ export class PgStore implements Store {
          updated_at = now()`,
       [
         TOKEN_ROW_ID,
-        tokens.accessToken,
-        tokens.refreshToken ?? null,
+        encryptSecret(tokens.accessToken, key),
+        tokens.refreshToken == null ? null : encryptSecret(tokens.refreshToken, key),
         tokens.expiryDate ?? null,
         tokens.channelId ?? null,
       ],
@@ -199,7 +206,16 @@ export class PgStore implements Store {
     const { rows } = await this.pool.query<TokenRow>(
       'SELECT * FROM oauth_tokens ORDER BY updated_at DESC LIMIT 1',
     );
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return null;
+
+    // Rows written before encryption existed have no prefix and are returned as-is.
+    const key = tokenEncryptionKey();
+    return {
+      ...row,
+      access_token: row.access_token === null ? null : decryptSecret(row.access_token, key),
+      refresh_token: row.refresh_token === null ? null : decryptSecret(row.refresh_token, key),
+    };
   }
 
   async createJob(videoId: string, stage = 'queued'): Promise<JobRow> {
@@ -398,6 +414,23 @@ export class PgStore implements Store {
       client.release();
       throw error;
     }
+  }
+
+  async captionFailureStreak(): Promise<number> {
+    // Everything uploaded after the newest accepted track is a consecutive failure. Counting from
+    // that boundary avoids sorting the whole upload history; NULL outcomes (rows from before this was
+    // recorded) are not failures, and `-infinity` covers a history with no success at all.
+    const { rows } = await this.pool.query<{ streak: number }>(
+      `SELECT count(*)::int AS streak
+       FROM videos
+       WHERE uploaded_at IS NOT NULL
+         AND captions_uploaded IS FALSE
+         AND uploaded_at > COALESCE(
+           (SELECT max(uploaded_at) FROM videos WHERE uploaded_at IS NOT NULL AND captions_uploaded IS TRUE),
+           '-infinity'::timestamptz
+         )`,
+    );
+    return rows[0]?.streak ?? 0;
   }
 
   async listStaleUploadReservations(cutoff: string, limit = 100): Promise<VideoRow[]> {

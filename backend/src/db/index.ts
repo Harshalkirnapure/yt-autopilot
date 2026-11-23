@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pg from 'pg';
-import { assertProductionStoreConfig, config, paths } from '../config.js';
+import { assertProductionStoreConfig, assertTokenEncryptionConfig, config, paths } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { sleep } from '../utils/retry.js';
 import { MemoryStore } from './memoryStore.js';
@@ -45,9 +45,14 @@ async function connectWithRetry(client: pg.Pool, attempts = 5): Promise<void> {
 export async function initStore(): Promise<Store> {
   if (store) return store;
 
+  // Both guards run before a connection is opened or a request is accepted. The store check comes
+  // first so a production boot missing DATABASE_URL names that variable, not this one.
+  assertProductionStoreConfig({ nodeEnv: config.nodeEnv, databaseUrl: config.databaseUrl });
+  // Production must not write OAuth tokens in plaintext, and a malformed key must fail here rather
+  // than on the first token refresh.
+  assertTokenEncryptionConfig({ nodeEnv: config.nodeEnv, tokenEncryptionKey: config.tokenEncryptionKey });
+
   if (!config.databaseUrl) {
-    // Throws in production before anything can accept a request or a job.
-    assertProductionStoreConfig({ nodeEnv: config.nodeEnv, databaseUrl: config.databaseUrl });
     logger.warn('DATABASE_URL is not set — using the in-memory dev store. Data is lost on restart.');
     store = new MemoryStore();
     return store;

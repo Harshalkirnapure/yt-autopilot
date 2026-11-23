@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs",
     "test:db": "node scripts/run-db-tests.mjs",
+    "smoke:youtube": "tsx src/smoke/youtubeSmoke.ts",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "worker": "tsx src/workers/renderWorker.ts",
     "migrate": "tsx src/db/migrate.ts",

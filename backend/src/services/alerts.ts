@@ -40,3 +40,30 @@ export async function notifyAdmin(message: string, level: 'info' | 'error' = 'in
     logger.warn(`Telegram alert failed: ${errorMessage(error)}`);
   }
 }
+
+/**
+ * Alerts when uploads keep going out without their caption track.
+ *
+ * Nothing else fails in that case — the video is uploaded, approved and published normally — so the
+ * regression is otherwise silent while YouTube serves auto-captions instead of the script. The alert
+ * fires when the streak reaches the threshold and again on each further multiple of it, so a long
+ * outage is reminded about but a per-upload spam is not.
+ *
+ * Returns whether an alert was raised (tests and callers do not need it, but it makes the trigger
+ * explicit).
+ */
+export async function alertOnCaptionFailureStreak(
+  streak: number,
+  detail: string | null,
+): Promise<boolean> {
+  const threshold = config.captionFailureAlertThreshold;
+  if (streak < threshold || streak % threshold !== 0) return false;
+
+  const reason = detail?.trim() || 'YouTube rejected the caption track without a message.';
+  await notifyAdmin(
+    `${streak} uploads in a row went out without a caption track, so those videos show YouTube's ` +
+      `auto-captions instead of the script. Last error: ${reason}`,
+    'error',
+  );
+  return true;
+}

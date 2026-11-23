@@ -330,6 +330,7 @@ function applyVideo(video, options = {}) {
     $('upload-result').innerHTML = `<a class="link" href="${escapeHtml(video.youtube_url)}" target="_blank" rel="noreferrer">${escapeHtml(video.youtube_url)}</a> · ${escapeHtml(video.privacy_status || 'uploaded')}`;
   }
 
+  renderCaptionStatus(video);
   updateApprovalUi();
 }
 
@@ -503,6 +504,30 @@ async function refreshYoutube() {
     : 'Warning: YT_DISCLOSE_SYNTHETIC_MEDIA is off — no altered/synthetic media disclosure is sent to YouTube.';
 
   updateApprovalUi();
+}
+
+/**
+ * The caption track is best-effort, so a rejection does not fail the upload — which is why it has to
+ * be shown here. A video with `captions_uploaded: false` is served with YouTube's auto-captions.
+ */
+function renderCaptionStatus(video) {
+  const element = $('caption-status');
+  if (!element) return;
+
+  const failed = Boolean(video.youtube_video_id) && video.captions_uploaded === false;
+  element.classList.toggle('warn', failed);
+
+  if (!video.youtube_video_id) {
+    element.textContent = 'Caption track: will be sent with the upload.';
+  } else if (video.captions_uploaded === true) {
+    element.textContent = 'Caption track: uploaded — YouTube serves the script transcript, not auto-captions.';
+  } else if (failed) {
+    // The stored reason often ends with its own full stop; do not render a second one.
+    const reason = (video.caption_error || 'YouTube rejected it without a message').trim().replace(/[.!?]+$/, '');
+    element.textContent = `Caption track: FAILED — ${reason}. YouTube serves auto-captions for this upload.`;
+  } else {
+    element.textContent = 'Caption track: no outcome recorded for this upload.';
+  }
 }
 
 function updateApprovalUi() {
@@ -925,8 +950,16 @@ async function uploadVideo() {
     body: { videoId: state.videoId, privacyStatus: $('privacy').value, confirm: true },
   });
 
-  $('upload-result').innerHTML = `<a class="link" href="${escapeHtml(result.url)}" target="_blank" rel="noreferrer">${escapeHtml(result.url)}</a> · ${escapeHtml(result.privacyStatus)}${result.thumbnailApplied ? ' · thumbnail set' : ''}`;
-  toast(`Uploaded as ${result.privacyStatus}. Approval is still required to publish.`, 'success');
+  // The caption outcome lives in #caption-status (refreshed just below), so it is not repeated here.
+  $('upload-result').innerHTML =
+    `<a class="link" href="${escapeHtml(result.url)}" target="_blank" rel="noreferrer">${escapeHtml(result.url)}</a> · ${escapeHtml(result.privacyStatus)}` +
+    `${result.thumbnailApplied ? ' · thumbnail set' : ''}`;
+
+  if (result.captionsUploaded) {
+    toast(`Uploaded as ${result.privacyStatus}. Approval is still required to publish.`, 'success');
+  } else {
+    toast(`Uploaded, but the caption track failed: ${result.captionError || 'unknown error'}`, 'error');
+  }
 
   await refreshYoutube();
   await refreshVideo({ silent: true });

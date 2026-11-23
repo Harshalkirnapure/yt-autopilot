@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS videos (
   video_path TEXT,
   caption_path TEXT,
   thumbnail_path TEXT,
+  -- Caption-track outcome from the YouTube upload: NULL = never attempted, FALSE = rejected.
+  captions_uploaded BOOLEAN,
+  caption_error TEXT,
   seo_title TEXT,
   seo_description TEXT,
   seo_tags TEXT[],
@@ -35,6 +38,8 @@ CREATE TABLE IF NOT EXISTS videos (
 
 -- Added after the first release; keeps existing databases in step.
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS approved_by TEXT;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS captions_uploaded BOOLEAN;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS caption_error TEXT;
 
 CREATE INDEX IF NOT EXISTS videos_created_at_idx ON videos (created_at DESC);
 CREATE INDEX IF NOT EXISTS videos_youtube_id_idx ON videos (youtube_video_id);

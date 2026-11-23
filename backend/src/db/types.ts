@@ -14,6 +14,10 @@ export type VideoRow = {
   video_path: string | null;
   caption_path: string | null;
   thumbnail_path: string | null;
+  /** Caption track on the uploaded YouTube video: null = never attempted, false = rejected. */
+  captions_uploaded: boolean | null;
+  /** YouTube's rejection reason when the track failed; null when it uploaded or was never tried. */
+  caption_error: string | null;
   seo_title: string | null;
   seo_description: string | null;
   seo_tags: string[] | null;
@@ -44,6 +48,8 @@ export interface VideoPatch {
   video_path?: string | null;
   caption_path?: string | null;
   thumbnail_path?: string | null;
+  captions_uploaded?: boolean | null;
+  caption_error?: string | null;
   seo_title?: string | null;
   seo_description?: string | null;
   seo_tags?: string[] | null;
@@ -192,6 +198,13 @@ export interface Store {
   listLogs(videoId: string | null, limit?: number): Promise<LogRow[]>;
 
   countUploadsToday(): Promise<number>;
+
+  /**
+   * How many of the newest uploads in a row lack a caption track. Rows written before the caption
+   * outcome was recorded (NULL) are skipped, and the streak stops at the first uploaded video whose
+   * track was accepted.
+   */
+  captionFailureStreak(): Promise<number>;
 
   /** Videos whose `uploaded_at` is an abandoned quota reservation (no YouTube id), older than `cutoff`. */
   listStaleUploadReservations(cutoff: string, limit?: number): Promise<VideoRow[]>;

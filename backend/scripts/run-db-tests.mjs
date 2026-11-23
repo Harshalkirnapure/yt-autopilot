@@ -75,6 +75,8 @@ const env = {
   YT_AUDIT_PASSED: 'false',
   API_TOKEN: 'test-token',
   APPROVER_NAME: 'test-approver',
+  // Fixed 32-byte key (hex) so the suite can prove the tokens are encrypted at rest.
+  TOKEN_ENCRYPTION_KEY: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0',
 };
 
 for (const key of [

@@ -9,8 +9,14 @@ import { topicRoutes } from './topics.js';
 import { ttsRoutes } from './tts.js';
 import { uploadRoutes } from './upload.js';
 import { videoRoutes } from './videos.js';
+import type { UploadDependencies } from '../services/youtube.js';
 
-export async function registerRoutes(app: FastifyInstance): Promise<void> {
+export interface RouteOptions {
+  /** Test seam forwarded to POST /api/upload; see UploadRouteOptions. */
+  uploadDependencies?: UploadDependencies;
+}
+
+export async function registerRoutes(app: FastifyInstance, options: RouteOptions = {}): Promise<void> {
   await app.register(authRoutes);
   await app.register(healthRoutes);
   await app.register(topicRoutes);
@@ -20,5 +26,5 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(seoRoutes);
   await app.register(thumbnailRoutes);
   await app.register(renderRoutes);
-  await app.register(uploadRoutes);
+  await app.register(uploadRoutes, { uploadDependencies: options.uploadDependencies });
 }

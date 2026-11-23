@@ -84,6 +84,7 @@ All values live in `backend/.env` (loaded from the working directory). See `back
 | --- | --- |
 | `PORT`, `HOST`, `PUBLIC_BASE_URL` | API bind + public origin used for the OAuth redirect |
 | `DATABASE_URL`, `DATABASE_SSL` | Postgres/Supabase connection (set `DATABASE_SSL=true` for Supabase). **Required when `NODE_ENV=production`** — the app refuses to start without it |
+| `TOKEN_ENCRYPTION_KEY` | AES-256-GCM key for the stored YouTube OAuth tokens (32 bytes: base64 or 64 hex characters). **Required when `NODE_ENV=production`** — the app refuses to start without it. Generate with `openssl rand -base64 32` and keep it out of the database |
 | `REDIS_URL` | BullMQ connection; leave empty to render inline (a clear warning is logged at startup) |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | Gemini 2.5 Flash (`gemini-2.5-flash` by default) |
 | `TTS_PROVIDER`, `TTS_VOICE`, `TTS_RATE` | `edge` (no key) or `google`; default voice `en-IN-NeerjaNeural` |
@@ -94,12 +95,34 @@ All values live in `backend/.env` (loaded from the working directory). See `back
 | `YT_DISCLOSE_SYNTHETIC_MEDIA` | Sends `status.containsSyntheticMedia: true` on upload and publish; keep it on (default `true`) |
 | `YT_CATEGORY_ID`, `MAX_UPLOADS_PER_DAY` | Upload defaults (default 6/day quota guard) |
 | `YT_CAPTION_LANGUAGE` | BCP-47 language of the caption track uploaded from the rendered `.srt` (default `en`) |
+| `CAPTION_FAILURE_ALERT_THRESHOLD` | Consecutive uploads without a caption track before the admin is alerted, repeated at each further multiple (default 3) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Admin alerts (failure + draft-ready notifications). Unset, each alert is stored as an `alert` row in the activity log instead |
 | `SCHEDULER_ENABLED`, `CRON_SCHEDULE`, `CRON_TIMEZONE` | node-cron daily run (18:00 Asia/Kolkata by default) |
 | `PIPELINE_CATCH_UP_HOURS` | Boot catch-up threshold: run once if the newest run is older than this (default 24, match the cron period) |
 | `PIPELINE_SILENT_HOURS` | No completed run for this long marks the pipeline chip bad (default 30, one daily period plus slack) |
 | `DEFAULT_NICHE`, `DEFAULT_AUDIENCE`, `DEFAULT_LANGUAGE`, `DEFAULT_SCRIPT_LENGTH` | Scheduler defaults (the UI sends its own values) |
 | `FFMPEG_PATH`, `FFPROBE_PATH`, `RENDER_TIMEOUT_MS` | Binary overrides + per-command timeout |
+
+### Where the YouTube tokens live
+
+`oauth_tokens` holds a long-lived refresh token, so the column values are encrypted with AES-256-GCM
+under `TOKEN_ENCRYPTION_KEY` before they are written (`src/utils/tokenCipher.ts`). The key is only in
+the environment, so a database dump or backup on its own cannot be used to reach the channel.
+
+- **Production requires the key.** `NODE_ENV=production` without `TOKEN_ENCRYPTION_KEY` fails at
+  startup instead of silently falling back to plaintext. Development and tests may omit it; new rows
+  are then written unencrypted, which is fine for a local database.
+- **Existing plaintext rows keep working.** Values written before the key existed have no `enc:v1:`
+  prefix and are read as plaintext, so adding a key does not force a reconnect. They are encrypted on
+  the next write — the next Google token refresh or a reconnect. Running `npm run migrate` does not
+  rewrite them.
+- **A wrong or lost key is loud, not silent.** The store refuses to return garbage: you get an error
+  naming `TOKEN_ENCRYPTION_KEY`, and the fix is to restore the key or reconnect the channel at
+  `/api/youtube/auth`. Rotating the key therefore means reconnecting the channel once.
+
+```bash
+openssl rand -base64 32     # TOKEN_ENCRYPTION_KEY (backend/.env, or the host's secret store)
+```
 
 ### Store and queue safety
 
@@ -142,9 +165,9 @@ If Edge TTS is unreachable and `GOOGLE_TTS_KEY` is set, Google Cloud TTS is trie
    - Authorised JavaScript origin: `http://localhost:3000`
    - Authorised redirect URI: `http://localhost:3000/api/youtube/callback`
 5. Copy the client ID/secret into `YT_CLIENT_ID` / `YT_CLIENT_SECRET`.
-6. Restart the API, open the app, click **Connect channel**, and grant the `youtube.upload` + `youtube` + `youtube.force-ssl` scopes. The refresh token is stored in `oauth_tokens`. `youtube.force-ssl` is what `captions.insert` accepts — a channel connected before this scope was added must be reconnected once, or the caption track is silently skipped with a warning.
+6. Restart the API, open the app, click **Connect channel**, and grant the `youtube.upload` + `youtube` + `youtube.force-ssl` scopes. The refresh token is stored in `oauth_tokens`, encrypted with `TOKEN_ENCRYPTION_KEY` (see [Where the YouTube tokens live](#where-the-youtube-tokens-live)). `youtube.force-ssl` is what `captions.insert` accepts — a channel connected before this scope was added must be reconnected once, or the caption track is silently skipped with a warning.
 
-The callback redirects to `/?youtube=connected` (or `/?youtube=error&reason=…`).
+The callback redirects to `/?youtube=connected` (or `/?youtube=error&reason=…`). You can prove the connection with `npm run smoke:youtube` (see [Live YouTube smoke test](#live-youtube-smoke-test-opt-in)).
 
 **Quota:** `videos.insert` costs 1,600 units of the default 10,000/day → 6 uploads maximum. The caption track adds 400 units per upload (`captions.insert`), so the six daily uploads' captions cost 2,400 of the shared 10,000. The API counts uploads from the last 24 hours and refuses to exceed `MAX_UPLOADS_PER_DAY` (hard-capped at 6). `thumbnails.set` costs 50 units.
 
@@ -304,6 +327,14 @@ YouTube's auto-captions. It is best effort: if the track is rejected the video s
 warning is logged, because failing the request would report a real upload as a failure and hand its
 quota slot back.
 
+Because it is best-effort, the outcome is kept rather than only logged: `videos.captions_uploaded`
+(`NULL` = never attempted, `false` = rejected) and `videos.caption_error` (YouTube's reason) are
+written with the upload, included in `GET /api/videos/:id` and shown in the review step, so a
+regression stays visible after the request is gone. Repeated failures are also alerted:
+`CAPTION_FAILURE_ALERT_THRESHOLD` consecutive uploads without a track (default 3) send an admin
+alert, repeated at each further multiple — a caption outage does not fail anything else, so it would
+otherwise be silent while YouTube serves auto-captions instead of the script.
+
 Approval is enforced in the store layer (`backend/src/db/approval.ts`): any write to the script,
 audio, render, caption, thumbnail, SEO metadata, topic or YouTube id clears `approved_at` and
 `approved_by` in the same update, so an approved video must be approved again after it changes.
@@ -345,10 +376,10 @@ Ctrl+C is the graceful path: the queue stops pulling jobs and the render in flig
 
 `backend/src/db/schema.sql` (applied automatically on startup and by `npm run migrate`):
 
-- `videos` — topic, script, asset paths, SEO, YouTube id, privacy, status (`draft`/`rendered`/`uploaded`/`published`/`failed`), approval timestamp
+- `videos` — topic, script, asset paths, SEO, YouTube id, privacy, status (`draft`/`rendered`/`uploaded`/`published`/`failed`), approval timestamp, caption outcome (`captions_uploaded`, `caption_error`)
 - `used_clips` — one row per Pexels clip id (unique) → cross-video dedupe
 - `used_topics` — unique per topic (case-insensitive) → topic dedupe
-- `oauth_tokens` — single rotating row with access/refresh token + channel id
+- `oauth_tokens` — single rotating row with access/refresh token (AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEY`) + channel id
 - `job_logs` — per-step `success`/`failed`/`warning`/`info` entries
 - `render_jobs` — queue-facing status/progress for polling
 - `pipeline_runs` — ledger of scheduled/boot/manual attempts (trigger, status, video, job, reason/error)
@@ -412,6 +443,8 @@ Coverage:
 - `test/buildSections.test.ts` — section splitting, exact audio-length allocation, contiguity, proportional timing, stripped timestamps/markdown.
 - `test/dedupe.test.ts` — clip ledger idempotency, case-insensitive topic ledger, near-duplicate detection, 6 unique topics even when a fallback topic is already used.
 - `test/quota.test.ts` — rolling 24-hour upload count and the guard that stops `videos.insert` at 6 uploads/day.
+- `test/captionAlert.test.ts` — the caption failure streak (newest-first, ended by a success, legacy NULL rows skipped) and the alert threshold/multiples.
+- `test/tokenCipher.test.ts` — AES-256-GCM round-trip, fresh IVs, tamper/wrong-key rejection, plaintext legacy values, key parsing (hex/base64) and the production key guard.
 - `test/publish.test.ts` — HTTP-level gates: confirm flag, upload required, human approval required, `YT_AUDIT_PASSED` required, approval requires an upload, upload requires confirmation.
 
 ### PostgreSQL integration suite
@@ -435,6 +468,57 @@ triggers, `TEXT[]` and `timestamptz` round-tripping, the approval rule in real S
 route writing `approved_by` through PgStore.
 
 Use a different throwaway name with `PG_TEST_DATABASE=yt_autopilot_test2 npm run test:db`.
+
+#### Running it without Docker
+
+Docker is optional — the suite only needs any reachable PostgreSQL 16 server. The commands below use
+EDB's portable Windows binaries unpacked into `.ci/pgsql` with a data directory at `.ci/data`
+(`.ci/` is gitignored); this is the setup the suite was actually verified against.
+
+```bash
+# from the repository root, once
+.ci/pgsql/bin/initdb.exe -D .ci/data -U postgres -A trust
+.ci/pgsql/bin/pg_ctl.exe -D .ci/data -o "-p 55432 -h 127.0.0.1" -l .ci/pg.log start
+
+# point the runner at that cluster instead of the compose default
+cd backend
+DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PG_TEST_DATABASE=yt_autopilot_test npm run test:db
+cd ..
+
+# stop it when you are done
+.ci/pgsql/bin/pg_ctl.exe -D .ci/data stop
+```
+
+`DATABASE_URL` here is only the admin connection used to create the throwaway database — it does not
+need to be the app database, so any superuser role and database will do (the example uses the
+`postgres` database on port 55432 to avoid clashing with a system server on 5432). `PG_TEST_DATABASE`
+must end in `_test`, is dropped and recreated on every run, and defaults to `yt_autopilot_test` when
+omitted. On macOS/Linux drop the `.exe` suffixes (`bin/initdb`, `bin/pg_ctl`); the rest is identical.
+
+### Live YouTube smoke test (opt-in)
+
+Everything above runs offline and without keys. The one thing a fake client cannot prove is the real
+YouTube path, so it has its own opt-in script:
+
+```bash
+cd backend
+npm run smoke:youtube
+```
+
+It reads the connected channel's stored OAuth tokens (`DATABASE_URL` + `/api/youtube/auth`) and:
+
+1. generates a 3-second 640×360 MP4, a 1280×720 PNG and a real `.srt` via `buildSections` + `writeSrtFile`;
+2. uploads it **private** through `uploadToYouTube` — the same function `POST /api/upload` uses — with
+   the thumbnail and the caption sidecar;
+3. checks the result flags, then verifies the track exists with `captions.list` (language, name, status);
+4. deletes the video again, even when a check failed.
+
+It skips with exit code 0 and a `SKIP` line when `YT_CLIENT_ID`/`YT_CLIENT_SECRET`, `DATABASE_URL` or the
+stored channel tokens are missing, and it is never part of `npm test`. It does not create a `videos` row
+or spend one of the 6 daily upload slots, but it does spend real API quota — one `videos.insert`, one
+`thumbnails.set`, one `captions.insert` and one `captions.list` (roughly 2,050 of the 10,000 daily units).
+Run it once after connecting a channel or changing OAuth scopes, not in a loop. If the delete is
+rejected, the video id and its Studio link are printed so you can remove it by hand.
 
 ### Continuous integration
 

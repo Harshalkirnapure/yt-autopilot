@@ -365,6 +365,34 @@ test('the upload count uses a real 24-hour window', async () => {
   assert.equal(await store.countUploadsToday(), 0);
 });
 
+test('caption outcomes are stored on the video and the failure streak is queryable', async () => {
+  const uploaded = async (topic: string, uploadedAt: string, captionsUploaded: boolean | null) => {
+    const video = await store.createVideo({ topic });
+    return store.updateVideo(video.id, {
+      youtube_video_id: `yt-${topic}`,
+      uploaded_at: uploadedAt,
+      status: 'uploaded',
+      ...(captionsUploaded === null ? {} : { captions_uploaded: captionsUploaded }),
+      caption_error: captionsUploaded === false ? 'captions.insert: forbidden' : null,
+    });
+  };
+
+  await uploaded('Older upload with captions', '2026-01-01T00:00:00.000Z', true);
+  const failed = await uploaded('Failed captions', '2026-01-02T00:00:00.000Z', false);
+  // A row from before this was recorded must neither count nor end the streak.
+  await uploaded('Legacy upload', '2026-01-03T00:00:00.000Z', null);
+  await uploaded('Newest failure', '2026-01-04T00:00:00.000Z', false);
+
+  assert.equal(failed.captions_uploaded, false);
+  assert.equal(failed.caption_error, 'captions.insert: forbidden');
+
+  const reloaded = await store.getVideo(failed.id);
+  assert.equal(reloaded?.captions_uploaded, false, 'the failure survives a reload');
+  assert.equal(reloaded?.caption_error, 'captions.insert: forbidden');
+
+  assert.equal(await store.captionFailureStreak(), 2, 'two failures, with the legacy row skipped');
+});
+
 test('listVideos is newest-first and honours the limit', async () => {
   const first = await store.createVideo({ topic: 'Listing one' });
   await new Promise((resolve) => setTimeout(resolve, 15));
@@ -394,6 +422,32 @@ test('OAuth tokens are upserted into a single row without losing the refresh tok
     'SELECT count(*)::int AS count FROM oauth_tokens',
   );
   assert.equal(rows[0]?.count, 1, 'tokens live in one rotating row');
+});
+
+test('OAuth tokens are encrypted at rest, and legacy plaintext rows still read', async () => {
+  await store.saveTokens({ accessToken: 'secret-access', refreshToken: 'secret-refresh' });
+
+  const { rows } = await pool().query<{ access_token: string; refresh_token: string | null }>(
+    'SELECT access_token, refresh_token FROM oauth_tokens',
+  );
+  const stored = rows[0]!;
+  assert.match(stored.access_token, /^enc:v1:/, 'the access token is encrypted in the column');
+  assert.match(stored.refresh_token ?? '', /^enc:v1:/, 'the refresh token is encrypted in the column');
+  assert.doesNotMatch(stored.access_token, /secret-access/);
+  assert.doesNotMatch(stored.refresh_token ?? '', /secret-refresh/);
+
+  const decrypted = await store.getTokens();
+  assert.equal(decrypted?.access_token, 'secret-access', 'the store returns plaintext to callers');
+  assert.equal(decrypted?.refresh_token, 'secret-refresh');
+
+  // A row written before encryption existed has no `enc:v1:` prefix and must keep working, so adding
+  // a key does not force a reconnect.
+  await pool().query(
+    "UPDATE oauth_tokens SET access_token = 'legacy-access', refresh_token = 'legacy-refresh'",
+  );
+  const legacy = await store.getTokens();
+  assert.equal(legacy?.access_token, 'legacy-access');
+  assert.equal(legacy?.refresh_token, 'legacy-refresh');
 });
 
 /* -------------------------------------------------------------------------- */

@@ -54,6 +54,8 @@ export class MemoryStore implements Store {
       video_path: null,
       caption_path: null,
       thumbnail_path: null,
+      captions_uploaded: null,
+      caption_error: null,
       seo_title: null,
       seo_description: null,
       seo_tags: null,
@@ -282,6 +284,19 @@ export class MemoryStore implements Store {
     return async () => {
       this.pipelineLocked = false;
     };
+  }
+
+  async captionFailureStreak(): Promise<number> {
+    const uploaded = [...this.videos.values()]
+      .filter((row) => row.uploaded_at !== null && row.captions_uploaded !== null)
+      .sort((a, b) => Date.parse(b.uploaded_at ?? '') - Date.parse(a.uploaded_at ?? ''));
+
+    let streak = 0;
+    for (const row of uploaded) {
+      if (row.captions_uploaded) break;
+      streak += 1;
+    }
+    return streak;
   }
 
   async listStaleUploadReservations(cutoff: string, limit = 100): Promise<VideoRow[]> {
