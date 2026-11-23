@@ -1,5 +1,8 @@
 # YT AutoPilot
 
+[![CI](https://github.com/Harshalkirnapure/yt-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Harshalkirnapure/yt-autopilot/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520.11-5FA04E?logo=node.js&logoColor=white)](backend/package.json)
+
 An end-to-end, policy-compliant YouTube pipeline: AI topic research → editable script → server-side MP3 voiceover → deduplicated Pexels footage → FFmpeg 1080p render with burned captions → SEO metadata + canvas thumbnail → **private/unlisted** YouTube upload with a human "Approve & Publish" gate.
 
 Nothing here downloads or re-uploads third-party YouTube videos. Visuals come only from Pexels (free licence) and text/metadata from Google Gemini.
