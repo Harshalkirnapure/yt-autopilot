@@ -100,3 +100,13 @@ jobs:
       - name: Postgres integration suite
         working-directory: backend
         run: npm run test:db
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build the React studio
+        working-directory: frontend
+        run: |
+          npm run build
+          test -f dist/index.html

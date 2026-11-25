@@ -1,0 +1,23 @@
+{
+  "name": "yt-autopilot-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "YT AutoPilot studio — React (Vite) front end for the backend API",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.0"
+  }
+}

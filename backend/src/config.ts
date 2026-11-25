@@ -11,9 +11,29 @@ const uploadsRoot = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.resolve(backendRoot, '..', 'uploads');
 
+/**
+ * The studio is a Vite app, so only a build is servable. `frontend/index.html` is the Vite *entry*
+ * document: its module entry is `/src/main.jsx`, which is JSX and cannot be executed by a browser.
+ * Serving that source folder would therefore look like a blank page, so the build state is tracked
+ * explicitly and reported instead (`frontend.ready`).
+ */
+const frontendSourceDir = path.resolve(backendRoot, '..', 'frontend');
+const frontendDir = process.env.FRONTEND_DIR
+  ? path.resolve(process.env.FRONTEND_DIR)
+  : path.join(frontendSourceDir, 'dist');
+
+export const frontend = {
+  /** What Fastify serves when `ready`: FRONTEND_DIR, else the Vite build output. */
+  dir: frontendDir,
+  /** Where the build comes from; only used to say how to produce it. */
+  sourceDir: frontendSourceDir,
+  /** `index.html` is present, i.e. there is a page a browser can actually run. */
+  ready: fs.existsSync(path.join(frontendDir, 'index.html')),
+} as const;
+
 export const paths = {
   backend: backendRoot,
-  frontend: path.resolve(backendRoot, '..', 'frontend'),
+  frontend: frontendDir,
   uploads: uploadsRoot,
   audio: path.join(uploadsRoot, 'audio'),
   clips: path.join(uploadsRoot, 'clips'),
@@ -22,7 +42,9 @@ export const paths = {
   temp: path.join(uploadsRoot, 'temp'),
 } as const;
 
-for (const dir of Object.values(paths)) {
+// Only the media folders are created here on purpose: conjuring an empty frontend/dist would hide a
+// missing build behind a directory that still has no index.html.
+for (const dir of [paths.uploads, paths.audio, paths.clips, paths.videos, paths.thumbnails, paths.temp]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 

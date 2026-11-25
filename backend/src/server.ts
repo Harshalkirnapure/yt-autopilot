@@ -5,7 +5,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { authenticate } from './auth.js';
-import { config, configStatus, inlineRenderWarning, paths } from './config.js';
+import { config, configStatus, frontend, inlineRenderWarning, paths } from './config.js';
 import { closeStore, initStore } from './db/index.js';
 import { registerRoutes, type RouteOptions } from './routes/index.js';
 import { reconcileOnBoot } from './services/reconciliation.js';
@@ -15,6 +15,65 @@ import { AppError } from './utils/errors.js';
 import { errorMessage, logger } from './utils/logger.js';
 
 export type BuildServerOptions = RouteOptions;
+
+/** Paths are shown relative to the repository when possible, else absolute. */
+function displayFrontendPath(): string {
+  const relative = path.relative(path.dirname(paths.backend), frontend.dir);
+  return relative !== '' && !relative.startsWith('..') ? relative : frontend.dir;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"]/g, (character) => {
+    switch (character) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      default:
+        return '&quot;';
+    }
+  });
+}
+
+/**
+ * What a browser gets while the studio has not been built. Serving the Vite entry document instead
+ * would produce an empty tab (it loads /src/main.jsx, which a browser cannot execute) while the
+ * server looked healthy, so this page names the fix and answers 503.
+ */
+function studioNotBuiltPage(): string {
+  const relative = displayFrontendPath();
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YT AutoPilot — studio not built</title>
+  </head>
+  <body style="font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif; max-width: 44rem; margin: 3.5rem auto; padding: 0 1.25rem; line-height: 1.6; color: #16181d;">
+    <h1 style="font-size: 1.3rem; margin-bottom: .35rem;">The API is running, but the studio has not been built</h1>
+    <p>There is no <code>index.html</code> in <code>${escapeHtml(relative)}</code>, so this server has no
+      page to show. The API itself is fine: <code>/api/*</code> and <code>/uploads/*</code> work normally.</p>
+
+    <h2 style="font-size: 1rem; margin-top: 1.75rem;">Build the studio</h2>
+    <pre style="background: #f2f3f5; padding: .8rem 1rem; border-radius: 8px; overflow-x: auto;">cd frontend
+npm install
+npm run build</pre>
+    <p>Then reload this page.</p>
+
+    <h2 style="font-size: 1rem; margin-top: 1.75rem;">Or use the dev server</h2>
+    <pre style="background: #f2f3f5; padding: .8rem 1rem; border-radius: 8px; overflow-x: auto;">cd frontend
+npm run dev</pre>
+    <p>Vite serves the studio at <a href="http://localhost:5173">http://localhost:5173</a> with hot reload
+      and proxies <code>/api</code> to this server.</p>
+
+    <p style="margin-top: 1.75rem; color: #5b6270; font-size: .9rem;">Serving the frontend source folder
+      is deliberately not an option: its <code>index.html</code> loads <code>/src/main.jsx</code>, which a
+      browser cannot execute, so the page would simply be blank.</p>
+  </body>
+</html>`;
+}
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
@@ -35,10 +94,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     decorateReply: false,
   });
 
-  // Single-page frontend.
-  if (fs.existsSync(paths.frontend)) {
+  // Single-page frontend: only a built studio is servable (see frontend.ready in config.ts).
+  if (frontend.ready) {
     await app.register(fastifyStatic, {
-      root: paths.frontend,
+      root: frontend.dir,
       prefix: '/',
       wildcard: true,
       decorateReply: false,
@@ -51,9 +110,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     if (request.url.startsWith('/api/')) {
       return reply.code(404).send({ error: `No route for ${request.method} ${request.url}` });
     }
-    const indexPath = path.join(paths.frontend, 'index.html');
-    if (!fs.existsSync(indexPath)) {
-      return reply.code(404).type('text/plain').send('Frontend not found. Expected frontend/index.html.');
+    // Missing media must stay a 404: answering with the studio HTML would reach <audio>/<video>
+    // as a decode failure instead of a failed request.
+    if (request.url.startsWith('/uploads/')) {
+      return reply.code(404).type('text/plain; charset=utf-8').send('Not found');
+    }
+    const indexPath = path.join(frontend.dir, 'index.html');
+    if (!frontend.ready || !fs.existsSync(indexPath)) {
+      return reply.code(503).type('text/html; charset=utf-8').send(studioNotBuiltPage());
     }
     return reply.type('text/html').send(fs.readFileSync(indexPath));
   });
@@ -89,6 +153,15 @@ async function main(): Promise<void> {
       ? 'API auth: token loaded from API_TOKEN.'
       : `API auth: no API_TOKEN set, so a token was generated in ${path.relative(process.cwd(), config.apiTokenFile)}. Paste it into the sign-in prompt.`,
   );
+
+  if (!frontend.ready) {
+    const relative = displayFrontendPath();
+    logger.warn(
+      `No built studio found (${relative}/index.html is missing), so http://localhost:${config.port} ` +
+        'will answer page requests with a "studio not built" notice instead of the UI. ' +
+        'Run "cd frontend && npm install && npm run build", or use "npm run dev" in frontend for hot reload.',
+    );
+  }
 
   const features = configStatus();
   const missing: string[] = [];

@@ -8,7 +8,7 @@ An end-to-end, policy-compliant YouTube pipeline: AI topic research → editable
 Nothing here downloads or re-uploads third-party YouTube videos. Visuals come only from Pexels (free licence) and text/metadata from Google Gemini.
 
 ```
-[Frontend: single-page studio]
+[Frontend: React studio (Vite)]
         │ REST
 [Fastify API]  /api/topics  /api/videos  /api/script  /api/tts
         │      /api/render  /api/status/:jobId  /api/seo
@@ -58,17 +58,32 @@ cp .env.example .env          # then fill in the keys below
 npm install
 npm run migrate               # applies src/db/schema.sql (idempotent)
 npm run dev                   # http://localhost:3000
+
+# 3. Frontend (React), in a second terminal
+cd frontend
+npm install
+npm run dev                   # http://localhost:5173
 ```
 
-Open <http://localhost:3000>. The UI, `/api/*` and `/uploads/*` are all served by Fastify.
+Open <http://localhost:5173> while developing: Vite serves the React studio and proxies `/api/*` and
+`/uploads/*` to the backend on `:3000`, so the session cookie stays same-origin. The backend still
+owner-serves the API and the uploaded media.
 
-Production build:
+Production build (one process, one port):
 
 ```bash
-cd backend
+cd frontend
+npm run build                 # writes frontend/dist
+cd ../backend
 npm run build
-npm start                     # node dist/server.js
+npm start                     # node dist/server.js → http://localhost:3000
 ```
+
+`npm start` serves `frontend/dist`, so the whole studio is reachable on the backend origin. Until that
+build exists, page requests answer **`503` with a short "studio not built" page** and the server logs
+a warning at startup: the source `frontend/index.html` is a Vite entry document (`/src/main.jsx`), so
+serving it would only ever produce a blank tab. Set `FRONTEND_DIR` to serve a different build
+directory.
 
 > If `DATABASE_URL` is empty the API starts with an **ephemeral in-memory store** so you can click through the UI without Docker. Data (including used-clip dedupe) disappears on restart, so use Postgres for anything real.
 
@@ -96,6 +111,7 @@ All values live in `backend/.env` (loaded from the working directory). See `back
 | Variable | Purpose |
 | --- | --- |
 | `PORT`, `HOST`, `PUBLIC_BASE_URL` | API bind + public origin used for the OAuth redirect |
+| `FRONTEND_DIR` | Optional. Directory holding a **built** studio to serve — defaults to `frontend/dist`. Without a build there, page requests answer `503` with a build notice |
 | `DATABASE_URL`, `DATABASE_SSL` | Postgres/Supabase connection (set `DATABASE_SSL=true` for Supabase). **Required when `NODE_ENV=production`** — the app refuses to start without it |
 | `TOKEN_ENCRYPTION_KEY` | AES-256-GCM key for the stored YouTube OAuth tokens (32 bytes: base64 or 64 hex characters). **Required when `NODE_ENV=production`** — the app refuses to start without it. Generate with `openssl rand -base64 32` and keep it out of the database |
 | `REDIS_URL` | BullMQ connection; leave empty to render inline (a clear warning is logged at startup) |
@@ -431,9 +447,18 @@ yt-autopilot/
 │   ├── .env.example
 │   └── package.json
 ├── frontend/
-│   ├── index.html         single-page studio
-│   ├── styles.css
-│   └── app.js
+│   ├── index.html         Vite entry document
+│   ├── vite.config.js     dev proxy → backend, build → frontend/dist
+│   ├── package.json
+│   └── src/
+│       ├── main.jsx       React root
+│       ├── App.jsx        page shell and card order
+│       ├── api.js         fetch wrapper (a 401 reopens the sign-in gate)
+│       ├── constants.js   voices, palettes, privacy options, storage keys
+│       ├── styles.css     studio theme
+│       ├── lib/           formatting helpers + canvas thumbnail designer
+│       ├── studio/        StudioProvider — all state and API actions
+│       └── components/    cards 01–08, sign-in gate, toasts, sidebar
 ├── uploads/               audio · clips · videos · thumbnails · temp
 ├── docker-compose.yml
 └── README.md
@@ -537,7 +562,7 @@ rejected, the video id and its Studio link are printed so you can remove it by h
 
 `.github/workflows/ci.yml` runs on every push and pull request and needs no local Docker: it starts a
 `postgres:16-alpine` service, then runs `npm run typecheck`, `npm run typecheck:test`, `npm run build`,
-`npm test` and `npm run test:db` in `backend/`.
+`npm test` and `npm run test:db` in `backend/`, plus `npm ci` and `npm run build` in `frontend/`.
 
 It also installs FFmpeg plus the caption fonts (`fonts-dejavu-core`, `fonts-liberation`) and fails early
 if the FFmpeg build has no libass `subtitles` filter — otherwise `test/render.test.ts` could report a
